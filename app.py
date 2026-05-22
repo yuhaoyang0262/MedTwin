@@ -12,6 +12,7 @@ Clean stdlib backend:
 from __future__ import annotations
 
 import json
+import math
 import mimetypes
 import os
 import time
@@ -122,6 +123,27 @@ FACTOR_LABELS = {
     "sedentaryTime": ("静态行为时间", 0.03),
 }
 
+BINARY_ONE_TWO_FIELDS = {
+    "cancerFamilyHistory",
+    "metabolicSyndrome",
+    "diabetes",
+    "hormoneTherapy",
+}
+
+CLINICAL_WEIGHTS = {
+    "breastCancerFamilyHistory": 0.70,
+    "benignBreastDisease": 0.65,
+    "cancerFamilyHistory": 0.45,
+    "metabolicSyndrome": 0.35,
+    "diabetes": 0.30,
+    "hormoneTherapy": 0.25,
+    "bmiCategory": 0.15,
+    "waistHipRatio": 0.12,
+    "sedentaryTime": 0.12,
+    "exercise": 0.10,
+    "depressionScore": 0.08,
+}
+
 
 @dataclass
 class Prediction:
@@ -203,14 +225,16 @@ class XGBoostRiskModel:
             self.model = None
 
     def predict(self, raw_features: dict[str, Any]) -> Prediction:
-        features = normalize_features(raw_features)
+        ui_features = normalize_ui_features(raw_features)
+        features = to_model_features(ui_features)
         if self.model is None:
             probability = fallback_score(features)
         else:
             probability = self._predict_model(features)
+        probability = clinically_calibrated_probability(probability, ui_features)
 
         risk_level = risk_level_for(probability)
-        factors = top_factors(features)
+        factors = top_factors(ui_features)
         explanation = (
             f"风险概率为 {probability:.1%}，等级为{risk_level}。"
             f"主要影响因素：{format_factor_names(factors)}。"
@@ -237,7 +261,7 @@ class XGBoostRiskModel:
         return float(self.model.predict(dmatrix)[0])
 
 
-def normalize_features(raw: dict[str, Any]) -> dict[str, float]:
+def normalize_ui_features(raw: dict[str, Any]) -> dict[str, float]:
     values = dict(DEFAULT_FEATURES)
     for key, value in raw.items():
         if key in values:
@@ -246,18 +270,60 @@ def normalize_features(raw: dict[str, Any]) -> dict[str, float]:
             except (TypeError, ValueError):
                 pass
 
+    return values
+
+
+def model_encoded_value(key: str, value: float) -> float:
+    if key in BINARY_ONE_TWO_FIELDS:
+        return 2.0 if value > 0 else 1.0
+    if key == "exercise":
+        return 1.0 if value > 0 else 2.0
+    return value
+
+
+def to_model_features(ui_values: dict[str, float]) -> dict[str, float]:
+    values = {key: model_encoded_value(key, value) for key, value in ui_values.items()}
+
     values["interactionFeature"] = (
         values["breastCancerFamilyHistory"]
         + values["benignBreastDisease"]
-        + values["cancerFamilyHistory"]
-        + values["metabolicSyndrome"]
-        + values["diabetes"]
+        + (1.0 if ui_values["cancerFamilyHistory"] > 0 else 0.0)
+        + (1.0 if ui_values["metabolicSyndrome"] > 0 else 0.0)
+        + (1.0 if ui_values["diabetes"] > 0 else 0.0)
     )
 
     return {
         model_name: float(values.get(front_key, 0.0))
         for front_key, model_name in FIELD_MAP.items()
     }
+
+
+def clinically_calibrated_probability(model_probability: float, ui_features: dict[str, float]) -> float:
+    probability = min(max(float(model_probability), 0.001), 0.999)
+    score = math.log(probability / (1.0 - probability))
+    if ui_features.get("breastCancerFamilyHistory", 0.0) > 0:
+        score += CLINICAL_WEIGHTS["breastCancerFamilyHistory"]
+    if ui_features.get("benignBreastDisease", 0.0) > 0:
+        score += CLINICAL_WEIGHTS["benignBreastDisease"]
+    if ui_features.get("cancerFamilyHistory", 0.0) > 0:
+        score += CLINICAL_WEIGHTS["cancerFamilyHistory"]
+    if ui_features.get("metabolicSyndrome", 0.0) > 0:
+        score += CLINICAL_WEIGHTS["metabolicSyndrome"]
+    if ui_features.get("diabetes", 0.0) > 0:
+        score += CLINICAL_WEIGHTS["diabetes"]
+    if ui_features.get("hormoneTherapy", 0.0) > 0:
+        score += CLINICAL_WEIGHTS["hormoneTherapy"]
+    if ui_features.get("bmiCategory", 0.0) >= 3:
+        score += CLINICAL_WEIGHTS["bmiCategory"]
+    if ui_features.get("waistHipRatio", 0.0) >= 0.85:
+        score += CLINICAL_WEIGHTS["waistHipRatio"]
+    if ui_features.get("sedentaryTime", 0.0) >= 8:
+        score += CLINICAL_WEIGHTS["sedentaryTime"]
+    if ui_features.get("exercise", 1.0) <= 0:
+        score += CLINICAL_WEIGHTS["exercise"]
+    if ui_features.get("depressionScore", 0.0) >= 10:
+        score += CLINICAL_WEIGHTS["depressionScore"]
+    return 1.0 / (1.0 + math.exp(-score))
 
 
 def fallback_score(features: dict[str, float]) -> float:
@@ -272,16 +338,16 @@ def fallback_score(features: dict[str, float]) -> float:
     return 1.0 / (1.0 + pow(2.718281828, -score))
 
 
-def top_factors(model_features: dict[str, float]) -> list[dict[str, Any]]:
-    reverse_map = {model: front for front, model in FIELD_MAP.items()}
+def top_factors(ui_features: dict[str, float]) -> list[dict[str, Any]]:
     scored = []
     for front_key, (label, weight) in FACTOR_LABELS.items():
-        model_key = FIELD_MAP.get(front_key)
-        value = model_features.get(model_key, 0.0) if model_key else 0.0
+        value = ui_features.get(front_key, 0.0)
         baseline = DEFAULT_FEATURES.get(front_key, 0.0)
         impact = abs(value - float(baseline)) * weight
-        if front_key in {"breastCancerFamilyHistory", "benignBreastDisease", "cancerFamilyHistory", "metabolicSyndrome", "diabetes", "hormoneTherapy", "menopause"}:
-            impact = value * weight
+        if front_key in {"breastCancerFamilyHistory", "benignBreastDisease", "cancerFamilyHistory", "metabolicSyndrome", "diabetes", "hormoneTherapy"}:
+            impact = weight if value > 0 else 0.0
+        if front_key == "exercise":
+            impact = weight if value <= 0 else 0.0
         if impact > 0:
             scored.append({"name": label, "value": value, "impact": round(impact, 3)})
     scored.sort(key=lambda item: item["impact"], reverse=True)

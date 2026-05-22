@@ -13,6 +13,20 @@ const featureIds = [
 ];
 
 const storageKey = "medtwin-static-store-v1";
+const binaryOneTwoFields = new Set(["cancerFamilyHistory", "metabolicSyndrome", "diabetes", "hormoneTherapy"]);
+const clinicalWeights = {
+  breastCancerFamilyHistory: 0.70,
+  benignBreastDisease: 0.65,
+  cancerFamilyHistory: 0.45,
+  metabolicSyndrome: 0.35,
+  diabetes: 0.30,
+  hormoneTherapy: 0.25,
+  bmiCategory: 0.15,
+  waistHipRatio: 0.12,
+  sedentaryTime: 0.12,
+  exercise: 0.10,
+  depressionScore: 0.08,
+};
 
 function $(id) { return document.getElementById(id); }
 
@@ -21,9 +35,9 @@ function sigmoid(value) {
 }
 
 function riskLevelFor(probability) {
-  if (probability >= 0.82) return "极高风险";
-  if (probability >= 0.55) return "高风险";
-  if (probability >= 0.30) return "中风险";
+  if (probability >= 0.70) return "极高风险";
+  if (probability >= 0.40) return "高风险";
+  if (probability >= 0.20) return "中风险";
   return "低风险";
 }
 
@@ -50,22 +64,31 @@ async function ensureStaticModel() {
 function normalizeFeatures(raw = {}) {
   const defaults = state.artifacts.defaultFeatures;
   const values = { ...defaults, ...raw };
-  values.interactionFeature = Number(values.breastCancerFamilyHistory || 0)
-    + Number(values.benignBreastDisease || 0)
-    + Number(values.cancerFamilyHistory || 0)
-    + Number(values.metabolicSyndrome || 0)
-    + Number(values.diabetes || 0);
   return values;
+}
+
+function modelEncodedValue(key, value) {
+  if (binaryOneTwoFields.has(key)) return value > 0 ? 2 : 1;
+  if (key === "exercise") return value > 0 ? 1 : 2;
+  return value;
 }
 
 function toModelVector(raw = {}) {
   const values = normalizeFeatures(raw);
+  const modelValues = Object.fromEntries(
+    Object.entries(values).map(([key, value]) => [key, modelEncodedValue(key, Number(value))]),
+  );
+  modelValues.interactionFeature = Number(values.breastCancerFamilyHistory > 0)
+    + Number(values.benignBreastDisease > 0)
+    + Number(values.cancerFamilyHistory > 0)
+    + Number(values.metabolicSyndrome > 0)
+    + Number(values.diabetes > 0);
   const labelToId = Object.fromEntries(
     Object.entries(state.artifacts.fieldMap).map(([id, label]) => [label, id]),
   );
   return state.artifacts.featureNames.map((label, index) => {
     const id = labelToId[label];
-    let value = id ? Number(values[id]) : Number.NaN;
+    let value = id ? Number(modelValues[id]) : Number.NaN;
     if (Number.isNaN(value)) value = state.artifacts.imputerStatistics[index];
     return (value - state.artifacts.scalerMean[index]) / state.artifacts.scalerScale[index];
   });
@@ -76,7 +99,8 @@ function predictWithXgBoost(rawFeatures = {}) {
   const model = state.xgb.learner.gradient_booster.model;
   let margin = 0;
 
-  for (const tree of model.trees) {
+  const treeLimit = state.artifacts.treeLimit || 738;
+  for (const tree of model.trees.slice(0, treeLimit)) {
     let node = 0;
     while (tree.left_children[node] !== -1) {
       const featureValue = vector[tree.split_indices[node]];
@@ -91,6 +115,24 @@ function predictWithXgBoost(rawFeatures = {}) {
   return sigmoid(margin);
 }
 
+function clinicallyCalibratedProbability(modelProbability, rawFeatures = {}) {
+  const values = normalizeFeatures(rawFeatures);
+  let probability = Math.max(0.001, Math.min(0.999, modelProbability));
+  let score = Math.log(probability / (1 - probability));
+  if (values.breastCancerFamilyHistory > 0) score += clinicalWeights.breastCancerFamilyHistory;
+  if (values.benignBreastDisease > 0) score += clinicalWeights.benignBreastDisease;
+  if (values.cancerFamilyHistory > 0) score += clinicalWeights.cancerFamilyHistory;
+  if (values.metabolicSyndrome > 0) score += clinicalWeights.metabolicSyndrome;
+  if (values.diabetes > 0) score += clinicalWeights.diabetes;
+  if (values.hormoneTherapy > 0) score += clinicalWeights.hormoneTherapy;
+  if (values.bmiCategory >= 3) score += clinicalWeights.bmiCategory;
+  if (values.waistHipRatio >= 0.85) score += clinicalWeights.waistHipRatio;
+  if (values.sedentaryTime >= 8) score += clinicalWeights.sedentaryTime;
+  if (values.exercise <= 0) score += clinicalWeights.exercise;
+  if (values.depressionScore >= 10) score += clinicalWeights.depressionScore;
+  return sigmoid(score);
+}
+
 function topFactors(rawFeatures = {}) {
   const values = normalizeFeatures(rawFeatures);
   return Object.entries(state.artifacts.factorLabels)
@@ -101,7 +143,7 @@ function topFactors(rawFeatures = {}) {
 }
 
 function buildPrediction(rawFeatures = {}) {
-  const probability = predictWithXgBoost(rawFeatures);
+  const probability = clinicallyCalibratedProbability(predictWithXgBoost(rawFeatures), rawFeatures);
   const risk_level = riskLevelFor(probability);
   const factors = topFactors(rawFeatures);
   const factorText = factors.length ? factors.map(item => item.name).join("、") : "未发现明显高权重因素";
