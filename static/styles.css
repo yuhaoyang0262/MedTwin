@@ -78,7 +78,7 @@ button, input, select { font: inherit; }
   border-radius: 24px;
   background:
     linear-gradient(90deg, rgba(255,255,255,.94), rgba(246,249,250,.78)),
-    url("/assets/hero-medtech-bg.png");
+    url("../assets/hero-medtech-bg.png");
   background-size: cover;
   background-position: right center;
   box-shadow: var(--shadow);

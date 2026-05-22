@@ -1,12 +1,11 @@
 # MedTwin
 
-Interpretable breast cancer risk stratification system based on routine clinical data.
-
 MedTwin is a dual-end breast cancer risk management demo system. It provides a patient-side form, doctor-side case queue, and XGBoost-based risk prediction API.
 
 ## Local Run
 
 ```powershell
+cd medtwin
 pip install -r requirements.txt
 python app.py
 ```

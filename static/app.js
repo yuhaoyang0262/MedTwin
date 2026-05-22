@@ -1,4 +1,9 @@
-const state = { meta: null };
+const state = {
+  meta: null,
+  staticReady: null,
+  artifacts: null,
+  xgb: null,
+};
 
 const featureIds = [
   "education", "insurance", "breastCancerFamilyHistory", "benignBreastDisease",
@@ -7,11 +12,210 @@ const featureIds = [
   "sleepHours", "depressionScore",
 ];
 
+const storageKey = "medtwin-static-store-v1";
+
 function $(id) { return document.getElementById(id); }
 
+function sigmoid(value) {
+  return 1 / (1 + Math.exp(-value));
+}
+
+function riskLevelFor(probability) {
+  if (probability >= 0.82) return "极高风险";
+  if (probability >= 0.55) return "高风险";
+  if (probability >= 0.30) return "中风险";
+  return "低风险";
+}
+
+function riskClass(level) {
+  if (level.includes("极高")) return "critical";
+  if (level.includes("高")) return "high";
+  if (level.includes("中")) return "middle";
+  return "low";
+}
+
+async function ensureStaticModel() {
+  if (!state.staticReady) {
+    state.staticReady = Promise.all([
+      fetch("static/model_artifacts.json").then(res => res.json()),
+      fetch("static/xgboost_model_SJ.json").then(res => res.json()),
+    ]).then(([artifacts, xgb]) => {
+      state.artifacts = artifacts;
+      state.xgb = xgb;
+    });
+  }
+  return state.staticReady;
+}
+
+function normalizeFeatures(raw = {}) {
+  const defaults = state.artifacts.defaultFeatures;
+  const values = { ...defaults, ...raw };
+  values.interactionFeature = Number(values.breastCancerFamilyHistory || 0)
+    + Number(values.benignBreastDisease || 0)
+    + Number(values.cancerFamilyHistory || 0)
+    + Number(values.metabolicSyndrome || 0)
+    + Number(values.diabetes || 0);
+  return values;
+}
+
+function toModelVector(raw = {}) {
+  const values = normalizeFeatures(raw);
+  const labelToId = Object.fromEntries(
+    Object.entries(state.artifacts.fieldMap).map(([id, label]) => [label, id]),
+  );
+  return state.artifacts.featureNames.map((label, index) => {
+    const id = labelToId[label];
+    let value = id ? Number(values[id]) : Number.NaN;
+    if (Number.isNaN(value)) value = state.artifacts.imputerStatistics[index];
+    return (value - state.artifacts.scalerMean[index]) / state.artifacts.scalerScale[index];
+  });
+}
+
+function predictWithXgBoost(rawFeatures = {}) {
+  const vector = toModelVector(rawFeatures);
+  const model = state.xgb.learner.gradient_booster.model;
+  let margin = 0;
+
+  for (const tree of model.trees) {
+    let node = 0;
+    while (tree.left_children[node] !== -1) {
+      const featureValue = vector[tree.split_indices[node]];
+      const goLeft = Number.isNaN(featureValue)
+        ? tree.default_left[node] === 1
+        : featureValue < tree.split_conditions[node];
+      node = goLeft ? tree.left_children[node] : tree.right_children[node];
+    }
+    margin += tree.base_weights[node];
+  }
+
+  return sigmoid(margin);
+}
+
+function topFactors(rawFeatures = {}) {
+  const values = normalizeFeatures(rawFeatures);
+  return Object.entries(state.artifacts.factorLabels)
+    .filter(([id]) => Number(values[id] || 0) > 0)
+    .map(([id, meta]) => ({ key: id, name: meta.name, weight: meta.weight }))
+    .sort((a, b) => b.weight - a.weight)
+    .slice(0, 3);
+}
+
+function buildPrediction(rawFeatures = {}) {
+  const probability = predictWithXgBoost(rawFeatures);
+  const risk_level = riskLevelFor(probability);
+  const factors = topFactors(rawFeatures);
+  const factorText = factors.length ? factors.map(item => item.name).join("、") : "未发现明显高权重因素";
+  return {
+    probability: Math.round(probability * 1000000) / 1000000,
+    risk_level,
+    factors,
+    explanation: `风险概率为 ${(probability * 100).toFixed(1)}%，等级为${risk_level}。主要影响因素：${factorText}。该结果仅用于课程演示和辅助筛查，不替代临床诊断。`,
+    model_status: "选用模型：XGBoost Risk",
+    threshold: state.artifacts.threshold,
+  };
+}
+
+function readStore() {
+  const fallback = { cases: [], queue: [], undo: [] };
+  try {
+    return { ...fallback, ...JSON.parse(localStorage.getItem(storageKey) || "{}") };
+  } catch {
+    return fallback;
+  }
+}
+
+function writeStore(store) {
+  localStorage.setItem(storageKey, JSON.stringify(store));
+}
+
+function makeCase(payload, id) {
+  const prediction = buildPrediction(payload.features);
+  const created = new Date();
+  const riskQueue = prediction.probability >= state.artifacts.threshold;
+  return {
+    id,
+    name: payload.name || "未命名病例",
+    age: payload.age || 45,
+    role: payload.role || "patient",
+    status: riskQueue ? "待医生复核" : "已归档",
+    created_at: created.toISOString(),
+    created_at_text: created.toLocaleString("zh-CN", { hour12: false }),
+    features: payload.features,
+    prediction,
+  };
+}
+
+async function staticApi(path, options = {}) {
+  await ensureStaticModel();
+  const url = new URL(path, window.location.origin);
+  const store = readStore();
+
+  if (url.pathname.endsWith("/api/meta")) {
+    return {
+      modelStatus: "选用模型：XGBoost Risk",
+      threshold: state.artifacts.threshold,
+      queue: store.queue,
+      undoCount: store.undo.length,
+    };
+  }
+
+  if (url.pathname.endsWith("/api/predict")) {
+    const payload = JSON.parse(options.body || "{}");
+    return buildPrediction(payload.features || payload);
+  }
+
+  if (url.pathname.endsWith("/api/cases") && options.method === "POST") {
+    const payload = JSON.parse(options.body || "{}");
+    store.undo.push(JSON.stringify(store));
+    const nextId = store.cases.reduce((max, item) => Math.max(max, item.id), 1000) + 1;
+    const item = makeCase(payload, nextId);
+    store.cases.unshift(item);
+    if (item.status === "待医生复核") store.queue.push(item.id);
+    writeStore(store);
+    return { ok: true, case: item };
+  }
+
+  if (url.pathname.endsWith("/api/cases")) {
+    let cases = [...store.cases];
+    const q = (url.searchParams.get("q") || "").trim();
+    const role = url.searchParams.get("role") || "all";
+    const sort = url.searchParams.get("sort") || "risk";
+    if (q) cases = cases.filter(item => item.name.includes(q) || String(item.id).includes(q));
+    if (role !== "all") cases = cases.filter(item => item.role === role);
+    if (sort === "risk") cases.sort((a, b) => b.prediction.probability - a.prediction.probability);
+    else cases.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+    return { cases, queue: store.queue };
+  }
+
+  if (url.pathname.endsWith("/api/queue/pop")) {
+    store.undo.push(JSON.stringify(store));
+    const caseId = store.queue.shift();
+    const item = store.cases.find(entry => entry.id === caseId);
+    if (item) item.status = "医生已复核";
+    writeStore(store);
+    return { caseId };
+  }
+
+  if (url.pathname.endsWith("/api/undo")) {
+    const previous = store.undo.pop();
+    if (previous) {
+      writeStore(JSON.parse(previous));
+      return { ok: true };
+    }
+    return { ok: false, message: "暂无可撤销操作" };
+  }
+
+  return { error: "not found" };
+}
+
 async function api(path, options = {}) {
-  const res = await fetch(path, { headers: { "Content-Type": "application/json" }, ...options });
-  return res.json();
+  try {
+    const res = await fetch(path, { headers: { "Content-Type": "application/json" }, ...options });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return await res.json();
+  } catch {
+    return staticApi(path, options);
+  }
 }
 
 function showView(view) {
@@ -32,13 +236,6 @@ function collectPayload() {
   };
 }
 
-function riskClass(level) {
-  if (level.includes("极高")) return "critical";
-  if (level.includes("高")) return "high";
-  if (level.includes("中")) return "middle";
-  return "low";
-}
-
 function renderPrediction(prediction) {
   const percent = Math.round(prediction.probability * 1000) / 10;
   const factors = prediction.factors.slice(0, 3).map(f => `<span class="factor">${f.name}</span>`).join("");
@@ -53,8 +250,8 @@ function renderPrediction(prediction) {
 }
 
 async function loadMeta() {
-  state.meta = await api("/api/meta");
-  const cases = await api("/api/cases?sort=time");
+  state.meta = await api("api/meta");
+  const cases = await api("api/cases?sort=time");
   $("modelStatus").textContent = state.meta.modelStatus.replace("选用模型：", "");
   $("thresholdValue").textContent = Number(state.meta.threshold).toFixed(3);
   $("caseCount").textContent = cases.cases.length;
@@ -63,12 +260,12 @@ async function loadMeta() {
 }
 
 async function previewRisk() {
-  const result = await api("/api/predict", { method: "POST", body: JSON.stringify(collectPayload()) });
+  const result = await api("api/predict", { method: "POST", body: JSON.stringify(collectPayload()) });
   renderPrediction(result);
 }
 
 async function submitCase() {
-  await api("/api/cases", { method: "POST", body: JSON.stringify(collectPayload()) });
+  await api("api/cases", { method: "POST", body: JSON.stringify(collectPayload()) });
   await loadMeta();
   showView("doctor");
 }
@@ -77,7 +274,7 @@ async function loadCases() {
   const q = encodeURIComponent($("searchInput").value || "");
   const sort = $("sortSelect").value;
   const role = $("roleSelect").value;
-  const data = await api(`/api/cases?q=${q}&sort=${sort}&role=${role}`);
+  const data = await api(`api/cases?q=${q}&sort=${sort}&role=${role}`);
   $("queueLine").textContent = data.queue.length ? `待复核队列：${data.queue.join(" → ")}` : "当前无待复核病例";
   $("caseRows").innerHTML = data.cases.map(item => {
     const p = item.prediction;
@@ -95,13 +292,13 @@ async function loadCases() {
 }
 
 async function popQueue() {
-  await api("/api/queue/pop", { method: "POST", body: "{}" });
+  await api("api/queue/pop", { method: "POST", body: "{}" });
   await loadMeta();
   await loadCases();
 }
 
 async function undo() {
-  await api("/api/undo", { method: "POST", body: "{}" });
+  await api("api/undo", { method: "POST", body: "{}" });
   await loadMeta();
   await loadCases();
 }

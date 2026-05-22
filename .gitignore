@@ -1,28 +1,6 @@
-# Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
-*$py.class
-
-# Distribution / packaging
-build/
-dist/
-*.egg-info/
-
-# Virtual environments and local config
-.env
-.envrc
 .venv/
-env/
 venv/
-ENV/
-
-# Tool caches
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
-
-# Editors and OS files
+.env
 .DS_Store
-.idea/
-.vscode/
-tempCodeRunnerFile.py
