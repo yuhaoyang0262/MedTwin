@@ -52,7 +52,7 @@ async function ensureStaticModel() {
   if (!state.staticReady) {
     state.staticReady = Promise.all([
       fetch("static/model_artifacts.json").then(res => res.json()),
-      fetch("static/xgboost_model_SJ.json").then(res => res.json()),
+      fetch("models/medtwin_xgboost.json").then(res => res.json()),
     ]).then(([artifacts, xgb]) => {
       state.artifacts = artifacts;
       state.xgb = xgb;
@@ -97,9 +97,10 @@ function toModelVector(raw = {}) {
 function predictWithXgBoost(rawFeatures = {}) {
   const vector = toModelVector(rawFeatures);
   const model = state.xgb.learner.gradient_booster.model;
-  let margin = 0;
+  const baseScore = Number(state.xgb.learner.learner_model_param?.base_score || 0.5);
+  let margin = Math.log(baseScore / (1 - baseScore));
 
-  const treeLimit = state.artifacts.treeLimit || 738;
+  const treeLimit = state.artifacts.treeLimit || model.trees.length;
   for (const tree of model.trees.slice(0, treeLimit)) {
     let node = 0;
     while (tree.left_children[node] !== -1) {
@@ -143,7 +144,10 @@ function topFactors(rawFeatures = {}) {
 }
 
 function buildPrediction(rawFeatures = {}) {
-  const probability = clinicallyCalibratedProbability(predictWithXgBoost(rawFeatures), rawFeatures);
+  const modelProbability = predictWithXgBoost(rawFeatures);
+  const probability = state.artifacts.useClinicalCalibration === false
+    ? modelProbability
+    : clinicallyCalibratedProbability(modelProbability, rawFeatures);
   const risk_level = riskLevelFor(probability);
   const factors = topFactors(rawFeatures);
   const factorText = factors.length ? factors.map(item => item.name).join("、") : "未发现明显高权重因素";
@@ -152,7 +156,7 @@ function buildPrediction(rawFeatures = {}) {
     risk_level,
     factors,
     explanation: `风险概率为 ${(probability * 100).toFixed(1)}%，等级为${risk_level}。主要影响因素：${factorText}。该结果仅用于课程演示和辅助筛查，不替代临床诊断。`,
-    model_status: "选用模型：XGBoost Risk",
+    model_status: state.artifacts.modelStatus || "选用模型：MedTwin XGBoost",
     threshold: state.artifacts.threshold,
   };
 }
@@ -194,7 +198,7 @@ async function staticApi(path, options = {}) {
 
   if (url.pathname.endsWith("/api/meta")) {
     return {
-      modelStatus: "选用模型：XGBoost Risk",
+      modelStatus: state.artifacts.modelStatus || "选用模型：MedTwin XGBoost",
       threshold: state.artifacts.threshold,
       queue: store.queue,
       undoCount: store.undo.length,
@@ -264,12 +268,15 @@ function showView(view) {
   document.querySelectorAll(".view").forEach(node => node.classList.remove("active"));
   document.querySelectorAll(".nav__btn").forEach(btn => btn.classList.toggle("active", btn.dataset.view === view));
   $(`${view}View`).classList.add("active");
-  if (view === "doctor") loadCases();
+  if (view === "doctor") {
+    loadCases();
+  }
 }
 
 function collectPayload() {
   const features = {};
   for (const id of featureIds) features[id] = Number($(id).value);
+  features.age = Number($("age").value || 45);
   return {
     name: $("name").value.trim() || "未命名病例",
     age: Number($("age").value || 45),
@@ -315,9 +322,13 @@ async function submitCase() {
 async function loadCases() {
   const q = encodeURIComponent($("searchInput").value || "");
   const sort = $("sortSelect").value;
-  const role = $("roleSelect").value;
-  const data = await api(`api/cases?q=${q}&sort=${sort}&role=${role}`);
-  $("queueLine").textContent = data.queue.length ? `待复核队列：${data.queue.join(" → ")}` : "当前无待复核病例";
+  const data = await api(`api/cases?q=${q}&sort=${sort}&role=all`);
+  const hasQueue = data.queue.length > 0;
+  $("queueLine").textContent = hasQueue
+    ? `当前显示全部病例 ${data.cases.length} 条；待复核队列：${data.queue.join(" → ")}`
+    : `当前显示全部病例 ${data.cases.length} 条；暂无待复核病例。`;
+  $("popQueueBtn").disabled = false;
+  $("popQueueBtn").title = hasQueue ? "处理复核队列中的第一位病例" : "当前没有待复核病例，点击可查看提示";
   $("caseRows").innerHTML = data.cases.map(item => {
     const p = item.prediction;
     const percent = Math.round(p.probability * 1000) / 10;
@@ -334,9 +345,12 @@ async function loadCases() {
 }
 
 async function popQueue() {
-  await api("api/queue/pop", { method: "POST", body: "{}" });
+  const result = await api("api/queue/pop", { method: "POST", body: "{}" });
   await loadMeta();
   await loadCases();
+  $("queueLine").textContent = result.message || (result.caseId
+    ? `已处理队首病例 #${result.caseId}`
+    : "当前无待复核病例。请先在患者端录入高风险病例并点击“预测并入库”。");
 }
 
 async function undo() {
@@ -356,6 +370,5 @@ $("popQueueBtn").addEventListener("click", popQueue);
 $("undoBtn").addEventListener("click", undo);
 $("searchInput").addEventListener("input", loadCases);
 $("sortSelect").addEventListener("change", loadCases);
-$("roleSelect").addEventListener("change", loadCases);
 
 loadMeta().then(loadCases);

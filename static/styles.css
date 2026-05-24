@@ -102,45 +102,6 @@ button, input, select { font: inherit; }
 .status-card__grid { display: grid; gap: 10px; margin-top: 18px; }
 .status-card__grid div { padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: rgba(255,255,255,.7); }
 .status-card b { display: block; margin-top: 5px; font-size: 22px; color: var(--ink); }
-.knowledge-panel { margin-top: 16px; }
-.knowledge-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
-  margin-top: 16px;
-}
-.knowledge-card {
-  padding: 16px;
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  background: #fbfdfe;
-}
-.knowledge-card span {
-  display: inline-flex;
-  min-height: 24px;
-  align-items: center;
-  padding: 0 9px;
-  border-radius: 999px;
-  background: var(--teal-soft);
-  color: var(--teal-dark);
-  font-size: 12px;
-  font-weight: 750;
-}
-.knowledge-card h3 {
-  margin: 12px 0 6px;
-  font-size: 16px;
-  color: var(--ink);
-}
-.knowledge-card p {
-  margin: 0;
-  color: var(--muted);
-  font-size: 13px;
-  line-height: 1.7;
-}
-.knowledge-card code {
-  color: var(--teal-dark);
-  font-weight: 750;
-}
 .panel {
   background: var(--panel);
   border: 1px solid var(--line);
@@ -173,6 +134,11 @@ input, select {
   border: 0;
   border-radius: 12px;
   cursor: pointer;
+}
+.btn:disabled {
+  cursor: not-allowed;
+  opacity: .55;
+  filter: grayscale(.15);
 }
 .btn--primary { background: var(--teal); color: white; }
 .btn--secondary { background: #e8f0f2; color: var(--ink); }
@@ -228,6 +194,5 @@ tr:last-child td { border-bottom: 0; }
 @media (max-width: 900px) {
   .hero, .page-grid { grid-template-columns: 1fr; }
   .hero { min-height: auto; padding: 26px; }
-  .knowledge-grid { grid-template-columns: 1fr; }
   .field-grid { grid-template-columns: 1fr; }
 }
