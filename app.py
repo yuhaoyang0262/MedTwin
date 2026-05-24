@@ -501,13 +501,16 @@ class Handler(BaseHTTPRequestHandler):
             send_json(self, {"ok": True, "case": case_to_dict(case)})
             return
         if parsed.path == "/api/queue/pop":
+            if not store.queue:
+                send_json(self, {"caseId": None, "message": "当前无待复核病例。请先在患者端提交高风险病例。"})
+                return
             store.push_undo("处理队列")
-            case_id = store.queue.popleft() if store.queue else None
+            case_id = store.queue.popleft()
             for case in store.cases:
                 if case.id == case_id:
                     case.status = "医生已复核"
                     break
-            send_json(self, {"caseId": case_id})
+            send_json(self, {"caseId": case_id, "message": f"已处理队首病例 #{case_id}"})
             return
         if parsed.path == "/api/undo":
             if not store.undo_stack:
