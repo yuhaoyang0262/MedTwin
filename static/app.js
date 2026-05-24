@@ -157,17 +157,38 @@ function buildPrediction(rawFeatures = {}) {
   };
 }
 
+function pendingCaseIds(cases = []) {
+  return cases
+    .filter(item => item && item.status === "待医生复核")
+    .map(item => item.id);
+}
+
+function normalizeStore(store = {}) {
+  const cases = Array.isArray(store.cases) ? store.cases.filter(Boolean) : [];
+  const existingQueue = Array.isArray(store.queue) ? store.queue : [];
+  const pendingIds = pendingCaseIds(cases);
+  const queue = existingQueue.filter(id => pendingIds.includes(id));
+  for (const id of pendingIds) {
+    if (!queue.includes(id)) queue.push(id);
+  }
+  return {
+    cases,
+    queue,
+    undo: Array.isArray(store.undo) ? store.undo : [],
+  };
+}
+
 function readStore() {
   const fallback = { cases: [], queue: [], undo: [] };
   try {
-    return { ...fallback, ...JSON.parse(localStorage.getItem(storageKey) || "{}") };
+    return normalizeStore({ ...fallback, ...JSON.parse(localStorage.getItem(storageKey) || "{}") });
   } catch {
     return fallback;
   }
 }
 
 function writeStore(store) {
-  localStorage.setItem(storageKey, JSON.stringify(store));
+  localStorage.setItem(storageKey, JSON.stringify(normalizeStore(store)));
 }
 
 function makeCase(payload, id) {
@@ -196,7 +217,7 @@ async function staticApi(path, options = {}) {
     return {
       modelStatus: state.artifacts.modelStatus || "选用模型：Dual Distilled",
       threshold: state.artifacts.threshold,
-      queue: store.queue,
+      queue: pendingCaseIds(store.cases),
       undoCount: store.undo.length,
     };
   }
@@ -212,7 +233,7 @@ async function staticApi(path, options = {}) {
     const nextId = store.cases.reduce((max, item) => Math.max(max, item.id), 1000) + 1;
     const item = makeCase(payload, nextId);
     store.cases.unshift(item);
-    if (item.status === "待医生复核") store.queue.push(item.id);
+    if (item.status === "待医生复核" && !store.queue.includes(item.id)) store.queue.push(item.id);
     writeStore(store);
     return { ok: true, case: item };
   }
@@ -226,16 +247,21 @@ async function staticApi(path, options = {}) {
     if (role !== "all") cases = cases.filter(item => item.role === role);
     if (sort === "risk") cases.sort((a, b) => b.prediction.probability - a.prediction.probability);
     else cases.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
-    return { cases, queue: store.queue };
+    return { cases, queue: pendingCaseIds(store.cases) };
   }
 
   if (url.pathname.endsWith("/api/queue/pop")) {
+    const queue = pendingCaseIds(store.cases);
+    if (!queue.length) {
+      return { caseId: null, message: "当前无待复核病例。请先在患者端录入高风险病例并点击“预测并入库”。" };
+    }
     store.undo.push(JSON.stringify(store));
-    const caseId = store.queue.shift();
+    const caseId = queue[0];
     const item = store.cases.find(entry => entry.id === caseId);
     if (item) item.status = "医生已复核";
+    store.queue = pendingCaseIds(store.cases);
     writeStore(store);
-    return { caseId };
+    return { caseId, message: `已处理队首病例 #${caseId}` };
   }
 
   if (url.pathname.endsWith("/api/undo")) {
