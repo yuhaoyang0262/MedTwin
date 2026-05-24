@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>MedTwin 医患双端病例管理系统</title>
+  <link rel="stylesheet" href="static/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar__inner">
+      <div class="brand">
+        <div class="brand__mark">M</div>
+        <div>
+          <div class="brand__name">MedTwin</div>
+          <div class="brand__sub">医患双端病例管理系统</div>
+        </div>
+      </div>
+      <nav class="nav">
+        <button class="nav__btn active" data-view="home">首页</button>
+        <button class="nav__btn" data-view="patient">患者端</button>
+        <button class="nav__btn" data-view="doctor">医生端</button>
+      </nav>
+    </div>
+  </header>
+
+  <main class="shell">
+    <section class="view active" id="homeView">
+      <div class="hero">
+        <div class="hero__copy">
+          <p class="eyebrow">Dual-end clinical workflow</p>
+          <h1>MedTwin</h1>
+          <h2>乳腺癌风险预测与病例管理系统</h2>
+          <p class="hero__desc">患者端完成指标录入和风险预测，医生端管理病例、处理复核队列，并查看模型输出和主要影响因素。</p>
+          <div class="hero__actions">
+            <button class="btn btn--primary" data-view="patient">进入患者端</button>
+            <button class="btn btn--secondary" data-view="doctor">进入医生端</button>
+          </div>
+          <p class="hero__status" id="homeStatus">模型状态读取中...</p>
+        </div>
+        <aside class="status-card">
+          <span>运行状态</span>
+          <strong id="modelStatus">-</strong>
+          <div class="status-card__grid">
+            <div><small>病例总数</small><b id="caseCount">0</b></div>
+            <div><small>待复核</small><b id="queueCount">0</b></div>
+            <div><small>当前阈值</small><b id="thresholdValue">-</b></div>
+          </div>
+        </aside>
+      </div>
+
+      <section class="panel knowledge-panel">
+        <div class="section-head">
+          <h2>课程知识点对应关系</h2>
+          <p>系统将数据结构课程中的线性表、队列、栈、排序、查找和映射应用到病例管理流程中。</p>
+        </div>
+        <div class="knowledge-grid">
+          <article class="knowledge-card">
+            <span>顺序表</span>
+            <h3>病例列表</h3>
+            <p>使用 <code>store.cases</code> 存储病例，支持遍历、追加、筛选和表格展示。</p>
+          </article>
+          <article class="knowledge-card">
+            <span>队列</span>
+            <h3>医生复核</h3>
+            <p>使用 <code>store.queue</code> 保存待复核病例，点击“处理队首”体现先进先出。</p>
+          </article>
+          <article class="knowledge-card">
+            <span>栈</span>
+            <h3>撤销操作</h3>
+            <p>使用 <code>store.undo_stack</code> 保存状态快照，撤销时按后进先出恢复。</p>
+          </article>
+          <article class="knowledge-card">
+            <span>排序算法</span>
+            <h3>病例排序</h3>
+            <p>支持按风险、时间、年龄和姓名排序，辅助医生快速定位重点病例。</p>
+          </article>
+          <article class="knowledge-card">
+            <span>查找算法</span>
+            <h3>病例检索</h3>
+            <p>按患者姓名或病例编号检索病例，完成医生端快速查询。</p>
+          </article>
+          <article class="knowledge-card">
+            <span>字典 / 映射</span>
+            <h3>特征组织</h3>
+            <p>维护字段映射、模型特征映射和主要影响因素标签，组织预测输入。</p>
+          </article>
+        </div>
+      </section>
+    </section>
+
+    <section class="view" id="patientView">
+      <div class="page-grid">
+        <section class="panel form-panel">
+          <div class="section-head">
+            <h2>患者端录入</h2>
+            <p>填写关键指标后进行风险预测，或提交到医生端复核队列。</p>
+          </div>
+          <form id="caseForm">
+            <div class="form-group">
+              <h3>基础信息</h3>
+              <div class="field-grid">
+                <label>姓名<input id="name" value="新病例" /></label>
+                <label>年龄<input id="age" type="number" value="45" min="18" max="90" /></label>
+                <label>学历<select id="education"><option value="1">初中及以下</option><option value="2" selected>高中/中专</option><option value="3">大专及以上</option></select></label>
+                <label>医保类型<select id="insurance"><option value="1">自费/其他</option><option value="2" selected>居民医保</option><option value="3">职工医保</option></select></label>
+              </div>
+            </div>
+
+            <div class="form-group">
+              <h3>病史因素</h3>
+              <div class="field-grid">
+                <label>乳腺癌家族史<select id="breastCancerFamilyHistory"><option value="0" selected>无</option><option value="1">有</option></select></label>
+                <label>良性乳腺病史<select id="benignBreastDisease"><option value="0" selected>无</option><option value="1">有</option></select></label>
+                <label>恶性肿瘤家族史<select id="cancerFamilyHistory"><option value="0" selected>无</option><option value="1">有</option></select></label>
+                <label>代谢综合征<select id="metabolicSyndrome"><option value="0" selected>无</option><option value="1">有</option></select></label>
+                <label>二型糖尿病<select id="diabetes"><option value="0" selected>无</option><option value="1">有</option></select></label>
+                <label>激素替代疗法<select id="hormoneTherapy"><option value="0" selected>否</option><option value="1">是</option></select></label>
+              </div>
+            </div>
+
+            <div class="form-group">
+              <h3>生活方式</h3>
+              <div class="field-grid">
+                <label>BMI 分类<select id="bmiCategory"><option value="1">偏低</option><option value="2" selected>正常</option><option value="3">超重</option><option value="4">肥胖</option></select></label>
+                <label>腰臀比<input id="waistHipRatio" type="number" step="0.01" value="0.84" /></label>
+                <label>静态行为时间/天<input id="sedentaryTime" type="number" value="6" min="0" max="16" /></label>
+                <label>中高强度运动<select id="exercise"><option value="1" selected>每周有</option><option value="0">不足</option></select></label>
+                <label>睡眠时长<input id="sleepHours" type="number" value="7" min="0" max="16" /></label>
+                <label>抑郁得分<input id="depressionScore" type="number" value="0" min="0" max="50" /></label>
+              </div>
+            </div>
+
+            <div class="button-row">
+              <button type="button" class="btn btn--secondary" id="previewBtn">只预测</button>
+              <button type="button" class="btn btn--primary" id="submitBtn">预测并入库</button>
+            </div>
+          </form>
+        </section>
+
+        <aside class="panel result-panel">
+          <h2>预测结果</h2>
+          <div id="predictionBox" class="empty">尚未预测</div>
+        </aside>
+      </div>
+    </section>
+
+    <section class="view" id="doctorView">
+      <section class="panel">
+        <div class="doctor-head">
+          <div>
+            <h2>医生端病例表</h2>
+            <p>支持查询、排序、队列处理和撤销。</p>
+          </div>
+          <div class="button-row">
+            <button class="btn btn--warning" id="popQueueBtn">处理队首</button>
+            <button class="btn btn--secondary" id="undoBtn">撤销</button>
+          </div>
+        </div>
+        <div class="toolbar">
+          <input id="searchInput" placeholder="按姓名或编号查询" />
+          <select id="sortSelect">
+            <option value="risk">按风险排序</option>
+            <option value="time">按时间排序</option>
+            <option value="age">按年龄排序</option>
+            <option value="name">按姓名排序</option>
+          </select>
+          <select id="roleSelect">
+            <option value="all">全部端口</option>
+            <option value="patient">患者端</option>
+            <option value="doctor">医生端</option>
+          </select>
+        </div>
+        <div class="queue-line" id="queueLine">队列读取中...</div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>编号</th><th>病例</th><th>风险</th><th>状态</th><th>主要影响因素</th></tr>
+            </thead>
+            <tbody id="caseRows"></tbody>
+          </table>
+        </div>
+      </section>
+    </section>
+  </main>
+
+  <script src="static/app.js"></script>
+</body>
+</html>
