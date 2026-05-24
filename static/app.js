@@ -13,6 +13,7 @@ const featureIds = [
 ];
 
 const storageKey = "medtwin-static-store-v1";
+const reviewRiskCutoff = 0.40;
 const binaryOneTwoFields = new Set(["cancerFamilyHistory", "metabolicSyndrome", "diabetes", "hormoneTherapy"]);
 const clinicalWeights = {
   breastCancerFamilyHistory: 0.70,
@@ -154,6 +155,7 @@ function buildPrediction(rawFeatures = {}) {
     explanation: `风险概率为 ${(probability * 100).toFixed(1)}%，等级为${risk_level}。主要影响因素：${factorText}。该结果仅用于课程演示和辅助筛查，不替代临床诊断。`,
     model_status: state.artifacts.modelStatus || "选用模型：Dual Distilled",
     threshold: state.artifacts.threshold,
+    review_cutoff: reviewRiskCutoff,
   };
 }
 
@@ -166,6 +168,10 @@ function pendingCaseIds(cases = []) {
 function normalizeStore(store = {}) {
   const cases = Array.isArray(store.cases) ? store.cases.filter(Boolean) : [];
   const existingQueue = Array.isArray(store.queue) ? store.queue : [];
+  for (const item of cases) {
+    const probability = Number(item.prediction && item.prediction.probability);
+    if (item.status === "已归档" && probability >= reviewRiskCutoff) item.status = "待医生复核";
+  }
   const pendingIds = pendingCaseIds(cases);
   const queue = existingQueue.filter(id => pendingIds.includes(id));
   for (const id of pendingIds) {
@@ -191,10 +197,14 @@ function writeStore(store) {
   localStorage.setItem(storageKey, JSON.stringify(normalizeStore(store)));
 }
 
+function isStaticHosting() {
+  return location.protocol === "file:" || location.hostname.endsWith("github.io");
+}
+
 function makeCase(payload, id) {
   const prediction = buildPrediction(payload.features);
   const created = new Date();
-  const riskQueue = prediction.probability >= state.artifacts.threshold;
+  const riskQueue = prediction.probability >= reviewRiskCutoff;
   return {
     id,
     name: payload.name || "未命名病例",
@@ -277,6 +287,7 @@ async function staticApi(path, options = {}) {
 }
 
 async function api(path, options = {}) {
+  if (isStaticHosting()) return staticApi(path, options);
   try {
     const res = await fetch(path, { headers: { "Content-Type": "application/json" }, ...options });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -336,9 +347,15 @@ async function previewRisk() {
 }
 
 async function submitCase() {
-  await api("api/cases", { method: "POST", body: JSON.stringify(collectPayload()) });
+  const result = await api("api/cases", { method: "POST", body: JSON.stringify(collectPayload()) });
   await loadMeta();
   showView("doctor");
+  await loadCases();
+  if (result.case) {
+    $("queueLine").textContent = result.case.status === "待医生复核"
+      ? `已新增病例 #${result.case.id}，已进入待复核队列。`
+      : `已新增病例 #${result.case.id}，当前风险未达到复核标准。`;
+  }
 }
 
 async function loadCases() {
