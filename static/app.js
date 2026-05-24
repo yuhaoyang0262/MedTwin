@@ -97,8 +97,7 @@ function toModelVector(raw = {}) {
 function predictWithXgBoost(rawFeatures = {}) {
   const vector = toModelVector(rawFeatures);
   const model = state.xgb.learner.gradient_booster.model;
-  const baseScore = Number(state.xgb.learner.learner_model_param?.base_score || 0.5);
-  let margin = Math.log(baseScore / (1 - baseScore));
+  let margin = 0;
 
   const treeLimit = state.artifacts.treeLimit || model.trees.length;
   for (const tree of model.trees.slice(0, treeLimit)) {
@@ -144,10 +143,7 @@ function topFactors(rawFeatures = {}) {
 }
 
 function buildPrediction(rawFeatures = {}) {
-  const modelProbability = predictWithXgBoost(rawFeatures);
-  const probability = state.artifacts.useClinicalCalibration === false
-    ? modelProbability
-    : clinicallyCalibratedProbability(modelProbability, rawFeatures);
+  const probability = clinicallyCalibratedProbability(predictWithXgBoost(rawFeatures), rawFeatures);
   const risk_level = riskLevelFor(probability);
   const factors = topFactors(rawFeatures);
   const factorText = factors.length ? factors.map(item => item.name).join("、") : "未发现明显高权重因素";
@@ -156,7 +152,7 @@ function buildPrediction(rawFeatures = {}) {
     risk_level,
     factors,
     explanation: `风险概率为 ${(probability * 100).toFixed(1)}%，等级为${risk_level}。主要影响因素：${factorText}。该结果仅用于课程演示和辅助筛查，不替代临床诊断。`,
-    model_status: state.artifacts.modelStatus || "选用模型：MedTwin XGBoost",
+    model_status: state.artifacts.modelStatus || "选用模型：Dual Distilled",
     threshold: state.artifacts.threshold,
   };
 }
@@ -198,7 +194,7 @@ async function staticApi(path, options = {}) {
 
   if (url.pathname.endsWith("/api/meta")) {
     return {
-      modelStatus: state.artifacts.modelStatus || "选用模型：MedTwin XGBoost",
+      modelStatus: state.artifacts.modelStatus || "选用模型：Dual Distilled",
       threshold: state.artifacts.threshold,
       queue: store.queue,
       undoCount: store.undo.length,
