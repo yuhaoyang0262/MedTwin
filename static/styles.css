@@ -196,3 +196,70 @@ tr:last-child td { border-bottom: 0; }
   .hero { min-height: auto; padding: 26px; }
   .field-grid { grid-template-columns: 1fr; }
 }
+
+
+.ds-panel {
+  display: grid;
+  grid-template-columns: minmax(220px, .8fr) minmax(280px, 1.2fr);
+  gap: 14px;
+  margin: 18px 0 14px;
+}
+.ds-card {
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: #fbfdfd;
+  padding: 16px 18px;
+}
+.ds-card span {
+  display: block;
+  color: var(--muted);
+  font-size: 14px;
+  margin-bottom: 6px;
+}
+.ds-card strong {
+  display: block;
+  color: var(--teal-dark);
+  font-size: 20px;
+  margin-bottom: 6px;
+}
+.ds-card p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 14px;
+}
+.risk-tree {
+  display: grid;
+  grid-template-columns: 1fr repeat(4, minmax(86px, 1fr));
+  gap: 10px;
+  align-items: stretch;
+}
+.tree-root,
+.tree-node {
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 10px 12px;
+  background: #fff;
+  color: var(--muted);
+  font-size: 14px;
+}
+.tree-root {
+  background: var(--teal-soft);
+  color: var(--teal-dark);
+  font-weight: 700;
+}
+.tree-root b,
+.tree-node b {
+  display: block;
+  margin-top: 4px;
+  font-size: 18px;
+  color: var(--ink);
+}
+.tree-node.active {
+  border-color: rgba(15, 118, 110, .28);
+  box-shadow: inset 3px 0 0 var(--teal);
+}
+@media (max-width: 840px) {
+  .ds-panel { grid-template-columns: 1fr; }
+  .risk-tree { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .tree-root { grid-column: 1 / -1; }
+}

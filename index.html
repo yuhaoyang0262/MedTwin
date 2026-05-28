@@ -127,6 +127,17 @@
             <option value="name">按姓名排序</option>
           </select>
         </div>
+        <div class="ds-panel" id="indexTreePanel">
+          <div class="ds-card">
+            <span>哈希索引</span>
+            <strong id="hashIndexStat">索引构建中</strong>
+            <p id="hashIndexHint">按编号或姓名快速定位病例。</p>
+          </div>
+          <div class="ds-card ds-card--tree">
+            <span>风险分层树</span>
+            <div class="risk-tree" id="riskTree"></div>
+          </div>
+        </div>
         <div class="queue-line" id="queueLine">队列读取中...</div>
         <div class="table-wrap">
           <table>
@@ -140,6 +151,6 @@
     </section>
   </main>
 
-  <script src="static/app.js?v=queue-fix-20260524"></script>
+  <script src="static/app.js?v=ds-index-tree-20260528"></script>
 </body>
 </html>

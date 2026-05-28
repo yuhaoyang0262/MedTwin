@@ -197,6 +197,66 @@ function writeStore(store) {
   localStorage.setItem(storageKey, JSON.stringify(normalizeStore(store)));
 }
 
+function buildCaseHashIndex(cases = []) {
+  const byId = new Map();
+  const byName = new Map();
+  for (const item of cases) {
+    byId.set(String(item.id), item);
+    const key = String(item.name || "").trim().toLowerCase();
+    if (!key) continue;
+    if (!byName.has(key)) byName.set(key, []);
+    byName.get(key).push(item);
+  }
+  return { byId, byName };
+}
+
+function searchWithHashIndex(cases = [], keyword = "") {
+  const q = keyword.trim().toLowerCase();
+  if (!q) return cases;
+  const index = buildCaseHashIndex(cases);
+  const exact = [];
+  const byId = index.byId.get(q);
+  if (byId) exact.push(byId);
+  const byName = index.byName.get(q) || [];
+  exact.push(...byName);
+  if (exact.length) return [...new Map(exact.map(item => [item.id, item])).values()];
+  return cases.filter(item => String(item.name || "").toLowerCase().includes(q) || String(item.id).includes(q));
+}
+
+function buildRiskTree(cases = []) {
+  const tree = {
+    name: "全部病例",
+    children: [
+      { name: "极高风险", min: 0.70, max: 1.01, cases: [] },
+      { name: "高风险", min: 0.40, max: 0.70, cases: [] },
+      { name: "中风险", min: 0.20, max: 0.40, cases: [] },
+      { name: "低风险", min: 0, max: 0.20, cases: [] },
+    ],
+  };
+  for (const item of cases) {
+    const probability = Number(item.prediction && item.prediction.probability) || 0;
+    const node = tree.children.find(entry => probability >= entry.min && probability < entry.max)
+      || tree.children[tree.children.length - 1];
+    node.cases.push(item);
+  }
+  return tree;
+}
+
+function renderDataStructurePanel(allCases = [], visibleCases = []) {
+  const hashStat = $("hashIndexStat");
+  const hashHint = $("hashIndexHint");
+  const riskTree = $("riskTree");
+  if (!hashStat || !riskTree) return;
+  const index = buildCaseHashIndex(allCases);
+  hashStat.textContent = `${index.byId.size} 个编号键 · ${index.byName.size} 个姓名键`;
+  hashHint.textContent = `当前命中 ${visibleCases.length} 条病例，查询优先使用 Map 哈希索引。`;
+  const tree = buildRiskTree(allCases);
+  riskTree.innerHTML = `<div class="tree-root">${tree.name}<b>${allCases.length}</b></div>` + tree.children.map(node => `
+    <div class="tree-node ${node.cases.length ? "active" : ""}">
+      <span>${node.name}</span><b>${node.cases.length}</b>
+    </div>`).join("");
+}
+
 function isStaticHosting() {
   return location.protocol === "file:" || location.hostname.endsWith("github.io");
 }
@@ -253,7 +313,7 @@ async function staticApi(path, options = {}) {
     const q = (url.searchParams.get("q") || "").trim();
     const role = url.searchParams.get("role") || "all";
     const sort = url.searchParams.get("sort") || "risk";
-    if (q) cases = cases.filter(item => item.name.includes(q) || String(item.id).includes(q));
+    if (q) cases = searchWithHashIndex(cases, q);
     if (role !== "all") cases = cases.filter(item => item.role === role);
     if (sort === "risk") cases.sort((a, b) => b.prediction.probability - a.prediction.probability);
     else cases.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
@@ -362,6 +422,8 @@ async function loadCases() {
   const q = encodeURIComponent($("searchInput").value || "");
   const sort = $("sortSelect").value;
   const data = await api(`api/cases?q=${q}&sort=${sort}&role=all`);
+  const allData = q ? await api(`api/cases?sort=${sort}&role=all`) : data;
+  renderDataStructurePanel(allData.cases, data.cases);
   const hasQueue = data.queue.length > 0;
   $("queueLine").textContent = hasQueue
     ? `当前显示全部病例 ${data.cases.length} 条；待复核队列：${data.queue.join(" → ")}`
